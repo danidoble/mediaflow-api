@@ -1,0 +1,36 @@
+# Development overrides — hot reload, exposed ports, mounted source
+services:
+  api:
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./src:/app/src
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
+    environment:
+      DEBUG: "true"
+
+  worker:
+    command: celery -A src.worker.celery_app worker --loglevel=debug --concurrency=1
+    volumes:
+      - ./src:/app/src
+    environment:
+      DEBUG: "true"
+
+  beat:
+    volumes:
+      - ./src:/app/src
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
+
+  db:
+    ports:
+      - "${DB_PORT:-5432}:5432"
+
+  redis:
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+
+  minio:
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"

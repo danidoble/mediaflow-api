@@ -1,0 +1,59 @@
+# Version control
+.git
+.gitignore
+
+# Secrets & local config — never bake into the image
+.env
+.env.*
+!.env.example
+
+# Python artifacts
+__pycache__
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv
+venv
+env
+
+# Test suite
+tests/
+.pytest_cache
+.coverage
+htmlcov/
+coverage.xml
+
+# Type checking / linting
+.mypy_cache
+.ruff_cache
+
+# IDE & OS
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Documentation & local-only files
+README.md
+CLAUDE.md
+specs.md
+*.postman_collection.json
+*.postman_environment.json
+
+# Docker Compose files (not needed inside the image)
+docker-compose*.yml
+docker-compose.dev.yml
+docker-compose.override.yml
+Dockerfile*
+
+# Alembic migration cache only (keep versions & ini)
+alembic/versions/__pycache__

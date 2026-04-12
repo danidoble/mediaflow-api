@@ -1,0 +1,1380 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "MediaFlow API",
+    "description": "## Overview\n\nAsynchronous media conversion API built with **FastAPI**, **Celery**, **FFmpeg**, and **MinIO**. Upload images or videos, receive a `job_id`, and poll for the result.\n\n---\n\n## Quick Start\n\n1. Set `email` and `password` in the **Variables** tab.\n2. Run **Register** or **Login** — `accessToken` and `refreshToken` are saved automatically.\n3. Upload a file to any **Image** or **Video** endpoint — `jobId` is saved automatically.\n4. Run **Get Job Status** until `status == \"completed\"`.\n5. The presigned download URL is stored in `resultUrl`.\n\n---\n\n## Response Envelope\n\nAll responses follow a standard envelope (except `POST /auth/login` and `204 No Content`):\n\n```json\n{\n  \"success\": true,\n  \"data\": { ... },\n  \"message\": \"optional message\"\n}\n```\n\n---\n\n## Authentication\n\nAll endpoints except **Health Check**, **Register**, and **Login** require a `Bearer` token. The collection-level auth is pre-configured to use `{{accessToken}}`.\n\n---\n\n## Rate Limits\n\n| Scope | Limit |\n|---|---|\n| `POST /image/*` | 30 req / min |\n| `POST /video/convert`, `/rotate`, `/resize`, `/trim` | 10 req / min |\n| `POST /video/thumbnail` | 20 req / min |\n\n---\n\n## Job Lifecycle\n\n`pending` → `started` → `completed` | `failed` | `cancelled`",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          ""
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Global: assert JSON content-type on all non-204 responses.",
+          "if (pm.response.code !== 204) {",
+          "    const ct = pm.response.headers.get('Content-Type') || '';",
+          "    pm.test('[Global] Content-Type is application/json', function () {",
+          "        pm.expect(ct).to.include('application/json');",
+          "    });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000",
+      "type": "string",
+      "description": "API base URL. Change to match your deployment (e.g. https://api.yourapp.com)."
+    },
+    {
+      "key": "email",
+      "value": "test@example.com",
+      "type": "string",
+      "description": "Email address used for registration and login."
+    },
+    {
+      "key": "password",
+      "value": "your-password-here",
+      "type": "string",
+      "description": "Password for registration and login. Use Postman Vault to store secrets in team environments."
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string",
+      "description": "JWT access token (TTL: 30 min by default). Auto-populated by Register and Login."
+    },
+    {
+      "key": "refreshToken",
+      "value": "",
+      "type": "string",
+      "description": "JWT refresh token (TTL: 7 days by default). Auto-populated by Register and Login."
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string",
+      "description": "Authenticated user UUID. Auto-populated by Register."
+    },
+    {
+      "key": "jobId",
+      "value": "",
+      "type": "string",
+      "description": "Last queued conversion job UUID. Auto-populated by any Image or Video endpoint."
+    },
+    {
+      "key": "resultUrl",
+      "value": "",
+      "type": "string",
+      "description": "Presigned MinIO download URL. Auto-populated by Get Job Status when the job is completed."
+    }
+  ],
+  "item": [
+    {
+      "name": "🔐 Authentication",
+      "description": "User registration, login, token refresh, and current-user profile.\n\nRunning **Register** or **Login** automatically saves `accessToken`, `refreshToken`, and `userId` to collection variables.",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Create a new user account.\n\nOn success (`201 Created`), the response contains `data.tokens` and `data.user`. The test script automatically saves `accessToken`, `refreshToken`, and `userId` to collection variables.\n\n**Request Body:**\n\n| Field | Type | Required | Constraints |\n|---|---|---|---|\n| `email` | string | ✓ | Valid email format |\n| `password` | string | ✓ | Min 1 character |\n\n**Response:**\n```json\n{\n  \"success\": true,\n  \"data\": {\n    \"user\": { \"id\": \"...\", \"email\": \"...\", \"is_active\": true, \"created_at\": \"...\" },\n    \"tokens\": { \"access_token\": \"...\", \"refresh_token\": \"...\", \"token_type\": \"bearer\" }\n  },\n  \"message\": \"Registration successful\"\n}\n```"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 201 Created', () => pm.response.to.have.status(201));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('tokens returned', () => {",
+                  "    pm.expect(res.data.tokens.access_token).to.be.a('string').and.not.empty;",
+                  "    pm.expect(res.data.tokens.refresh_token).to.be.a('string').and.not.empty;",
+                  "    pm.expect(res.data.tokens.token_type).to.eql('bearer');",
+                  "});",
+                  "pm.test('user data returned', () => {",
+                  "    pm.expect(res.data.user.email).to.be.a('string').and.not.empty;",
+                  "    pm.expect(res.data.user.is_active).to.be.true;",
+                  "});",
+                  "",
+                  "if (res.data && res.data.tokens) {",
+                  "    pm.collectionVariables.set('accessToken', res.data.tokens.access_token);",
+                  "    pm.collectionVariables.set('refreshToken', res.data.tokens.refresh_token);",
+                  "}",
+                  "if (res.data && res.data.user) {",
+                  "    pm.collectionVariables.set('userId', res.data.user.id);",
+                  "}",
+                  "console.log('accessToken, refreshToken, and userId saved from registration.');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "username",
+                  "value": "{{email}}",
+                  "type": "text",
+                  "description": "User email address. The OAuth2 spec refers to this field as 'username'."
+                },
+                {
+                  "key": "password",
+                  "value": "{{password}}",
+                  "type": "text",
+                  "description": "User password."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Authenticate and obtain a token pair (OAuth2 Password Flow).\n\n> ⚠️ This endpoint uses `application/x-www-form-urlencoded` (not JSON) and returns a **flat** OAuth2 token response instead of the standard envelope.\n\n**Request Body (form-encoded):**\n\n| Field | Type | Required | Description |\n|---|---|---|---|\n| `username` | string | ✓ | User email (OAuth2 spec uses this field name) |\n| `password` | string | ✓ | User password |\n\n**Response:**\n```json\n{\n  \"access_token\": \"...\",\n  \"refresh_token\": \"...\",\n  \"token_type\": \"bearer\"\n}\n```\n\nBoth tokens are saved automatically by the test script."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('access_token present', () => {",
+                  "    pm.expect(res.access_token).to.be.a('string').and.not.empty;",
+                  "});",
+                  "pm.test('refresh_token present', () => {",
+                  "    pm.expect(res.refresh_token).to.be.a('string').and.not.empty;",
+                  "});",
+                  "pm.test('token_type is bearer', () => pm.expect(res.token_type).to.eql('bearer'));",
+                  "",
+                  "pm.collectionVariables.set('accessToken', res.access_token);",
+                  "pm.collectionVariables.set('refreshToken', res.refresh_token);",
+                  "console.log('accessToken and refreshToken saved from login.');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refresh_token\": \"{{refreshToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Exchange a valid refresh token for a new access/refresh token pair. Use this when the access token expires (default TTL: 30 min).\n\nThe new tokens are saved automatically by the test script.\n\n**Request Body:**\n\n| Field | Type | Required | Description |\n|---|---|---|---|\n| `refresh_token` | string | ✓ | A valid, non-expired refresh token |"
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const rt = pm.collectionVariables.get('refreshToken');",
+                  "if (!rt) {",
+                  "    console.warn('refreshToken is empty — run Login or Register first.');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('new access_token returned', () => {",
+                  "    pm.expect(res.data.access_token).to.be.a('string').and.not.empty;",
+                  "});",
+                  "pm.test('new refresh_token returned', () => {",
+                  "    pm.expect(res.data.refresh_token).to.be.a('string').and.not.empty;",
+                  "});",
+                  "",
+                  "if (res.data) {",
+                  "    pm.collectionVariables.set('accessToken', res.data.access_token);",
+                  "    pm.collectionVariables.set('refreshToken', res.data.refresh_token);",
+                  "}",
+                  "console.log('Tokens refreshed and saved.');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Current User",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Returns the profile of the currently authenticated user. Requires a valid `accessToken` (inherited from collection-level Bearer auth).\n\n**Response:**\n```json\n{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"...\",\n    \"email\": \"user@example.com\",\n    \"is_active\": true,\n    \"created_at\": \"2026-01-01T00:00:00\"\n  }\n}\n```"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('user has email', () => pm.expect(res.data.email).to.be.a('string').and.not.empty);",
+                  "pm.test('user is active', () => pm.expect(res.data.is_active).to.be.true);",
+                  "pm.test('user has UUID id', () => pm.expect(res.data.id).to.match(/^[0-9a-f-]{36}$/i));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "🏥 Health",
+      "description": "System health check. Verifies all service dependencies are reachable. No authentication required.",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "health"
+              ]
+            },
+            "description": "Checks all system dependencies in parallel and returns their individual status.\n\nAlways returns `200 OK` — inspect individual component statuses in the response body to detect degraded services.\n\n**Response:**\n```json\n{\n  \"success\": true,\n  \"data\": {\n    \"database\": \"ok\",\n    \"redis\": \"ok\",\n    \"minio\": \"ok\",\n    \"ffmpeg\": \"ok\",\n    \"cwebp\": \"ok\"\n  },\n  \"message\": \"All systems operational\"\n}\n```"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('database is ok', () => pm.expect(res.data.database).to.eql('ok'));",
+                  "pm.test('redis is ok', () => pm.expect(res.data.redis).to.eql('ok'));",
+                  "pm.test('minio is ok', () => pm.expect(res.data.minio).to.eql('ok'));",
+                  "pm.test('ffmpeg is ok', () => pm.expect(res.data.ffmpeg).to.eql('ok'));",
+                  "pm.test('cwebp is ok', () => pm.expect(res.data.cwebp).to.eql('ok'));",
+                  "",
+                  "const degraded = Object.entries(res.data || {}).filter(([, v]) => v !== 'ok');",
+                  "if (degraded.length > 0) {",
+                  "    console.warn('Unhealthy components:', degraded.map(([k]) => k).join(', '));",
+                  "} else {",
+                  "    console.log('All systems operational.');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "🖼️ Image Processing",
+      "description": "Asynchronously convert and resize images using `cwebp` and FFmpeg.\n\n**Supported input formats:** JPEG, PNG, GIF, WebP, TIFF, BMP\n\nAll endpoints:\n- Accept `multipart/form-data`\n- Validate MIME type via `libmagic` (not file extension)\n- Return `202 Accepted` with `{ job_id, status: \"pending\" }`\n- Save `jobId` automatically via test script\n\n**Rate limit:** 30 requests / minute",
+      "item": [
+        {
+          "name": "Convert to WebP",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "Image to convert. Accepted formats: JPEG, PNG, GIF, WebP, TIFF, BMP."
+                },
+                {
+                  "key": "quality",
+                  "value": "80",
+                  "type": "text",
+                  "description": "WebP compression quality (0–100). Lower = smaller file. Default: 80."
+                },
+                {
+                  "key": "lossless",
+                  "value": "false",
+                  "type": "text",
+                  "description": "Enable lossless WebP compression (true/false). When true, quality is ignored. Default: false."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/image/convert/webp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "image",
+                "convert",
+                "webp"
+              ]
+            },
+            "description": "Convert an image to **WebP** format using `cwebp`. The conversion runs in a background Celery worker.\n\n**Parameters:**\n\n| Field | Type | Default | Description |\n|---|---|---|---|\n| `file` | File | — | Image file to convert |\n| `quality` | int | 80 | Compression quality (0–100) |\n| `lossless` | bool | false | Lossless compression mode |\n\n**Response (`202 Accepted`):**\n```json\n{\n  \"success\": true,\n  \"data\": { \"job_id\": \"<uuid>\", \"status\": \"pending\" },\n  \"message\": \"Job queued\"\n}\n```\n\nThe `jobId` collection variable is auto-saved. Poll **Get Job Status** for the result."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('job_id is a UUID', () => pm.expect(res.data.job_id).to.match(/^[0-9a-f-]{36}$/i));",
+                  "pm.test(\"initial status is 'pending'\", () => pm.expect(res.data.status).to.eql('pending'));",
+                  "",
+                  "if (res.data && res.data.job_id) {",
+                  "    pm.collectionVariables.set('jobId', res.data.job_id);",
+                  "    console.log('jobId saved:', res.data.job_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Convert to AVIF",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "Image to convert. Accepted formats: JPEG, PNG, GIF, WebP, TIFF, BMP."
+                },
+                {
+                  "key": "quality",
+                  "value": "60",
+                  "type": "text",
+                  "description": "AVIF quality level (0–63). 0 = lossless, 63 = lowest quality. Default: 60."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/image/convert/avif",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "image",
+                "convert",
+                "avif"
+              ]
+            },
+            "description": "Convert an image to **AVIF** format using FFmpeg with the `libaom-av1` encoder.\n\nAVIF offers significantly better compression than JPEG and WebP at equivalent visual quality, but encoding is CPU-intensive.\n\n**Parameters:**\n\n| Field | Type | Default | Description |\n|---|---|---|---|\n| `file` | File | — | Image file to convert |\n| `quality` | int | 60 | AV1 quality (0 = lossless, 63 = worst) |\n\n**Response (`202 Accepted`):**\n```json\n{\n  \"success\": true,\n  \"data\": { \"job_id\": \"<uuid>\", \"status\": \"pending\" },\n  \"message\": \"Job queued\"\n}\n```"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('job_id is a UUID', () => pm.expect(res.data.job_id).to.match(/^[0-9a-f-]{36}$/i));",
+                  "pm.test(\"initial status is 'pending'\", () => pm.expect(res.data.status).to.eql('pending'));",
+                  "",
+                  "if (res.data && res.data.job_id) {",
+                  "    pm.collectionVariables.set('jobId', res.data.job_id);",
+                  "    console.log('jobId saved:', res.data.job_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resize Image",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "Image to resize. Accepted formats: JPEG, PNG, GIF, WebP, TIFF, BMP."
+                },
+                {
+                  "key": "width",
+                  "value": "1280",
+                  "type": "text",
+                  "description": "Target width in pixels. Omit to scale proportionally based on height alone."
+                },
+                {
+                  "key": "height",
+                  "value": "720",
+                  "type": "text",
+                  "description": "Target height in pixels. Omit to scale proportionally based on width alone."
+                },
+                {
+                  "key": "fit",
+                  "value": "cover",
+                  "type": "text",
+                  "description": "Resize strategy: 'cover' (crop to fill, no letterbox), 'contain' (letterbox), 'fill' (stretch to exact dimensions). Default: cover."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/image/resize",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "image",
+                "resize"
+              ]
+            },
+            "description": "Resize an image to the specified dimensions using FFmpeg.\n\nAt least one of `width` or `height` must be provided.\n\n**Parameters:**\n\n| Field | Type | Default | Description |\n|---|---|---|---|\n| `file` | File | — | Image to resize |\n| `width` | int or null | null | Target width in pixels |\n| `height` | int or null | null | Target height in pixels |\n| `fit` | string | `cover` | Resize mode: `cover`, `contain`, or `fill` |\n\n**Fit modes:**\n- `cover` — Crop to exactly fill the target rectangle (no empty space).\n- `contain` — Scale to fit within the target rectangle, adding letterboxing.\n- `fill` — Stretch to exact dimensions, ignoring aspect ratio."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('job_id is a UUID', () => pm.expect(res.data.job_id).to.match(/^[0-9a-f-]{36}$/i));",
+                  "pm.test(\"initial status is 'pending'\", () => pm.expect(res.data.status).to.eql('pending'));",
+                  "",
+                  "if (res.data && res.data.job_id) {",
+                  "    pm.collectionVariables.set('jobId', res.data.job_id);",
+                  "    console.log('jobId saved:', res.data.job_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Convert to Format",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "Image to convert. Accepted formats: JPEG, PNG, GIF, WebP, TIFF, BMP."
+                },
+                {
+                  "key": "output_format",
+                  "value": "png",
+                  "type": "text",
+                  "description": "Target format: png, jpg, jpeg, gif, bmp, tiff, tif, webp, avif."
+                },
+                {
+                  "key": "quality",
+                  "value": "85",
+                  "type": "text",
+                  "description": "Quality hint (0–100). Used for JPEG output. Default: 85."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/image/convert/format",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "image",
+                "convert",
+                "format"
+              ]
+            },
+            "description": "Convert an image to **any supported raster format** using `ffmpeg`.\n\nSupported output formats: `png`, `jpg`/`jpeg`, `gif`, `bmp`, `tiff`/`tif`, `webp`, `avif`.\n\n**Response (`202 Accepted`):**\n```json\n{\n  \"success\": true,\n  \"data\": { \"job_id\": \"<uuid>\", \"status\": \"pending\" },\n  \"message\": \"Job queued\"\n}\n```"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('job_id is a UUID', () => pm.expect(res.data.job_id).to.match(/^[0-9a-f-]{36}$/i));",
+                  "pm.test(\"initial status is 'pending'\", () => pm.expect(res.data.status).to.eql('pending'));",
+                  "",
+                  "if (res.data && res.data.job_id) {",
+                  "    pm.collectionVariables.set('jobId', res.data.job_id);",
+                  "    console.log('jobId saved:', res.data.job_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Batch Convert to WebP",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": [],
+                  "description": "First image file. Add more 'files' fields for additional images (max 20)."
+                },
+                {
+                  "key": "quality",
+                  "value": "80",
+                  "type": "text",
+                  "description": "WebP quality (0–100). Default: 80."
+                },
+                {
+                  "key": "lossless",
+                  "value": "false",
+                  "type": "text",
+                  "description": "Lossless WebP (true/false). Default: false."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/image/batch/convert/webp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "image",
+                "batch",
+                "convert",
+                "webp"
+              ]
+            },
+            "description": "Convert **multiple images** to WebP in a single request (max 20 files). One Celery job is created per file.\n\n**Response (`202 Accepted`):**\n```json\n{\n  \"success\": true,\n  \"data\": {\n    \"jobs\": [\n      { \"job_id\": \"<uuid>\", \"filename\": \"photo.jpg\", \"status\": \"pending\" }\n    ],\n    \"total\": 1\n  },\n  \"message\": \"1 jobs queued\"\n}\n```"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('jobs is an array', () => pm.expect(res.data.jobs).to.be.an('array'));",
+                  "pm.test('total matches jobs length', () => pm.expect(res.data.total).to.eql(res.data.jobs.length));",
+                  "pm.test('each job has a UUID', () => {",
+                  "    res.data.jobs.forEach(j => pm.expect(j.job_id).to.match(/^[0-9a-f-]{36}$/i));",
+                  "});",
+                  "",
+                  "if (res.data.jobs && res.data.jobs.length > 0) {",
+                  "    pm.collectionVariables.set('jobId', res.data.jobs[0].job_id);",
+                  "    console.log('jobId saved (first):', res.data.jobs[0].job_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Batch Convert to AVIF",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": [],
+                  "description": "Image file(s) to convert (max 20). Add multiple 'files' fields."
+                },
+                {
+                  "key": "quality",
+                  "value": "60",
+                  "type": "text",
+                  "description": "AVIF quality/CRF (0–63). Lower = better. Default: 60."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/image/batch/convert/avif",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "image",
+                "batch",
+                "convert",
+                "avif"
+              ]
+            },
+            "description": "Convert **multiple images** to AVIF in a single request (max 20 files). One Celery job is created per file.\n\n**Response (`202 Accepted`):**\n```json\n{\n  \"success\": true,\n  \"data\": {\n    \"jobs\": [\n      { \"job_id\": \"<uuid>\", \"filename\": \"photo.png\", \"status\": \"pending\" }\n    ],\n    \"total\": 1\n  },\n  \"message\": \"1 jobs queued\"\n}\n```"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('jobs is an array', () => pm.expect(res.data.jobs).to.be.an('array'));",
+                  "pm.test('total matches jobs length', () => pm.expect(res.data.total).to.eql(res.data.jobs.length));",
+                  "pm.test('each job has a UUID', () => {",
+                  "    res.data.jobs.forEach(j => pm.expect(j.job_id).to.match(/^[0-9a-f-]{36}$/i));",
+                  "});",
+                  "",
+                  "if (res.data.jobs && res.data.jobs.length > 0) {",
+                  "    pm.collectionVariables.set('jobId', res.data.jobs[0].job_id);",
+                  "    console.log('jobId saved (first):', res.data.jobs[0].job_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Batch Convert to Format",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "files",
+                  "type": "file",
+                  "src": [],
+                  "description": "Image file(s) to convert (max 20). Add multiple 'files' fields."
+                },
+                {
+                  "key": "output_format",
+                  "value": "png",
+                  "type": "text",
+                  "description": "Target format: png, jpg, jpeg, gif, bmp, tiff, tif, webp, avif."
+                },
+                {
+                  "key": "quality",
+                  "value": "85",
+                  "type": "text",
+                  "description": "Quality hint (0–100). Default: 85."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/image/batch/convert/format",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "image",
+                "batch",
+                "convert",
+                "format"
+              ]
+            },
+            "description": "Convert **multiple images** to any supported format in a single request (max 20 files).\n\nSupported output formats: `png`, `jpg`/`jpeg`, `gif`, `bmp`, `tiff`/`tif`, `webp`, `avif`.\n\n**Response (`202 Accepted`):**\n```json\n{\n  \"success\": true,\n  \"data\": {\n    \"jobs\": [\n      { \"job_id\": \"<uuid>\", \"filename\": \"photo.webp\", \"status\": \"pending\" }\n    ],\n    \"total\": 1\n  },\n  \"message\": \"1 jobs queued\"\n}\n```"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('jobs is an array', () => pm.expect(res.data.jobs).to.be.an('array'));",
+                  "pm.test('total matches jobs length', () => pm.expect(res.data.total).to.eql(res.data.jobs.length));",
+                  "pm.test('each job has a UUID', () => {",
+                  "    res.data.jobs.forEach(j => pm.expect(j.job_id).to.match(/^[0-9a-f-]{36}$/i));",
+                  "});",
+                  "",
+                  "if (res.data.jobs && res.data.jobs.length > 0) {",
+                  "    pm.collectionVariables.set('jobId', res.data.jobs[0].job_id);",
+                  "    console.log('jobId saved (first):', res.data.jobs[0].job_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "🎬 Video Processing",
+      "description": "Asynchronously process video files using FFmpeg.\n\n**Supported input formats:** MP4, WebM, MKV (Matroska), MOV (QuickTime), AVI, MPEG, OGG, 3GPP\n\nAll endpoints:\n- Accept `multipart/form-data`\n- Validate MIME type via `libmagic`\n- Return `202 Accepted` with `{ job_id, status: \"pending\" }`\n- Save `jobId` automatically via test script\n- Use `os.cpu_count()` threads for FFmpeg automatically\n\n**Rate limits:**\n- Convert / Rotate / Resize / Trim: 10 req / min\n- Thumbnail: 20 req / min",
+      "item": [
+        {
+          "name": "Convert Video",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "Video to transcode. Accepted: MP4, WebM, MKV, MOV, AVI, MPEG, OGG, 3GPP."
+                },
+                {
+                  "key": "output_format",
+                  "value": "mp4",
+                  "type": "text",
+                  "description": "Output container format: mp4, webm, mkv, mov, avi. Default: mp4."
+                },
+                {
+                  "key": "codec",
+                  "value": "libx264",
+                  "type": "text",
+                  "description": "Video codec: libx264, libx265, libvpx-vp9, libaom-av1. Default: libx264."
+                },
+                {
+                  "key": "crf",
+                  "value": "23",
+                  "type": "text",
+                  "description": "Constant Rate Factor — quality control (0 = lossless, 51 = worst). Default: 23."
+                },
+                {
+                  "key": "preset",
+                  "value": "medium",
+                  "type": "text",
+                  "description": "Encoding speed preset. Slower presets produce smaller files at the cost of CPU time. Options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow. Default: medium."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/video/convert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "video",
+                "convert"
+              ]
+            },
+            "description": "Transcode a video to a different format and/or codec using FFmpeg.\n\n**Parameters:**\n\n| Field | Type | Default | Description |\n|---|---|---|---|\n| `file` | File | — | Video to transcode |\n| `output_format` | string | `mp4` | Output container format |\n| `codec` | string | `libx264` | Video codec |\n| `crf` | int | 23 | Constant Rate Factor (quality) |\n| `preset` | string | `medium` | Encoding speed vs. compression tradeoff |\n\n**Common codec/format pairings:**\n- H.264 → MP4: `codec=libx264`, `output_format=mp4`\n- H.265 → MP4: `codec=libx265`, `output_format=mp4`\n- VP9 → WebM: `codec=libvpx-vp9`, `output_format=webm`\n- AV1 → MKV: `codec=libaom-av1`, `output_format=mkv`"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('job_id is a UUID', () => pm.expect(res.data.job_id).to.match(/^[0-9a-f-]{36}$/i));",
+                  "pm.test(\"initial status is 'pending'\", () => pm.expect(res.data.status).to.eql('pending'));",
+                  "",
+                  "if (res.data && res.data.job_id) {",
+                  "    pm.collectionVariables.set('jobId', res.data.job_id);",
+                  "    console.log('jobId saved:', res.data.job_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Rotate Video",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "Video to rotate. Accepted: MP4, WebM, MKV, MOV, AVI, MPEG, OGG, 3GPP."
+                },
+                {
+                  "key": "degrees",
+                  "value": "90",
+                  "type": "text",
+                  "description": "Rotation angle. Must be exactly 90, 180, or 270. Values outside this set return 422. Default: 90."
+                },
+                {
+                  "key": "no_transcode",
+                  "value": "false",
+                  "type": "text",
+                  "description": "If true, rotation is written to the container metadata only (stream copy, no re-encoding). Faster, but not supported by all players. Default: false."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/video/rotate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "video",
+                "rotate"
+              ]
+            },
+            "description": "Rotate a video by 90°, 180°, or 270° clockwise.\n\n**Parameters:**\n\n| Field | Type | Default | Description |\n|---|---|---|---|\n| `file` | File | — | Video to rotate |\n| `degrees` | int | 90 | Rotation angle — must be **90**, **180**, or **270** |\n| `no_transcode` | bool | false | Metadata-only rotation (stream copy, no re-encode) |\n\n> ⚠️ Sending any value other than 90, 180, or 270 returns `422 Unprocessable Entity`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('job_id is a UUID', () => pm.expect(res.data.job_id).to.match(/^[0-9a-f-]{36}$/i));",
+                  "",
+                  "if (res.data && res.data.job_id) {",
+                  "    pm.collectionVariables.set('jobId', res.data.job_id);",
+                  "    console.log('jobId saved:', res.data.job_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Resize Video",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "Video to scale. Accepted: MP4, WebM, MKV, MOV, AVI, MPEG, OGG, 3GPP."
+                },
+                {
+                  "key": "width",
+                  "value": "1280",
+                  "type": "text",
+                  "description": "Target width in pixels. Omit to scale proportionally from height. At least one dimension is required."
+                },
+                {
+                  "key": "height",
+                  "value": "720",
+                  "type": "text",
+                  "description": "Target height in pixels. Omit to scale proportionally from width. At least one dimension is required."
+                },
+                {
+                  "key": "keep_aspect",
+                  "value": "true",
+                  "type": "text",
+                  "description": "Preserve aspect ratio (true/false). If false, the video is stretched to the exact target dimensions. Default: true."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/video/resize",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "video",
+                "resize"
+              ]
+            },
+            "description": "Scale a video to the specified dimensions using FFmpeg.\n\n**Parameters:**\n\n| Field | Type | Default | Description |\n|---|---|---|---|\n| `file` | File | — | Video to scale |\n| `width` | int or null | null | Target width in pixels |\n| `height` | int or null | null | Target height in pixels |\n| `keep_aspect` | bool | true | Preserve original aspect ratio |"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('job_id is a UUID', () => pm.expect(res.data.job_id).to.match(/^[0-9a-f-]{36}$/i));",
+                  "",
+                  "if (res.data && res.data.job_id) {",
+                  "    pm.collectionVariables.set('jobId', res.data.job_id);",
+                  "    console.log('jobId saved:', res.data.job_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Trim Video",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "Video to trim. Accepted: MP4, WebM, MKV, MOV, AVI, MPEG, OGG, 3GPP."
+                },
+                {
+                  "key": "start_time",
+                  "value": "00:00:10",
+                  "type": "text",
+                  "description": "Clip start time. Accepts HH:MM:SS format or decimal seconds (e.g. '10' or '1.5'). Required."
+                },
+                {
+                  "key": "end_time",
+                  "value": "00:01:00",
+                  "type": "text",
+                  "description": "Clip end time. Accepts HH:MM:SS format or decimal seconds. Must be after start_time. Required."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/video/trim",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "video",
+                "trim"
+              ]
+            },
+            "description": "Extract a clip from a video between two timestamps using a fast **stream copy** (no re-encoding, near-instant for large files).\n\n**Parameters:**\n\n| Field | Type | Required | Description |\n|---|---|---|---|\n| `file` | File | ✓ | Source video |\n| `start_time` | string | ✓ | Clip start — `HH:MM:SS` or decimal seconds |\n| `end_time` | string | ✓ | Clip end — `HH:MM:SS` or decimal seconds |\n\n> ℹ️ Stream copy means the output container timestamps may have a small offset relative to the requested times, aligned to the nearest keyframe."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('job_id is a UUID', () => pm.expect(res.data.job_id).to.match(/^[0-9a-f-]{36}$/i));",
+                  "",
+                  "if (res.data && res.data.job_id) {",
+                  "    pm.collectionVariables.set('jobId', res.data.job_id);",
+                  "    console.log('jobId saved:', res.data.job_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Extract Thumbnail",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "Source video. Accepted: MP4, WebM, MKV, MOV, AVI, MPEG, OGG, 3GPP."
+                },
+                {
+                  "key": "timestamp",
+                  "value": "00:00:01",
+                  "type": "text",
+                  "description": "Timestamp at which to capture the frame. Accepts HH:MM:SS or decimal seconds. Default: 00:00:01."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/video/thumbnail",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "video",
+                "thumbnail"
+              ]
+            },
+            "description": "Extract a single frame from a video at the specified timestamp and encode it as a **WebP** image.\n\n**Parameters:**\n\n| Field | Type | Default | Description |\n|---|---|---|---|\n| `file` | File | — | Source video |\n| `timestamp` | string | `00:00:01` | Frame capture timestamp (`HH:MM:SS` or decimal seconds) |\n\nThe output is a lossless WebP image stored in MinIO. Download it via the presigned `result_url` once the job is completed."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('job_id is a UUID', () => pm.expect(res.data.job_id).to.match(/^[0-9a-f-]{36}$/i));",
+                  "",
+                  "if (res.data && res.data.job_id) {",
+                  "    pm.collectionVariables.set('jobId', res.data.job_id);",
+                  "    console.log('jobId saved:', res.data.job_id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "📋 Jobs",
+      "description": "Track, retrieve, and cancel conversion jobs.\n\n### Polling Workflow\n\n1. Submit a file to any Image or Video endpoint → `jobId` is saved.\n2. Repeat **Get Job Status** until `status == \"completed\"`.\n3. `resultUrl` is populated automatically — use it to download your file.\n\nPresigned URLs expire after `PRESIGNED_URL_EXPIRE` seconds (default: 3600).\n\n### Job Status Values\n\n| Status | Description |\n|---|---|\n| `pending` | Queued, waiting for a worker |\n| `started` | Worker has picked up the job |\n| `completed` | Output file is ready in MinIO |\n| `failed` | Processing failed (see `error` field) |\n| `cancelled` | Job was cancelled by the user |\n\n### Job Type Values\n\n`image_convert_webp` · `image_convert_avif` · `image_resize` · `video_convert` · `video_rotate` · `video_resize` · `video_trim` · `video_thumbnail`",
+      "item": [
+        {
+          "name": "List Jobs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/jobs?page=1&page_size=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1",
+                  "description": "Page number (1-based). Default: 1."
+                },
+                {
+                  "key": "page_size",
+                  "value": "20",
+                  "description": "Results per page (1–100). Default: 20."
+                },
+                {
+                  "key": "status",
+                  "value": "completed",
+                  "disabled": true,
+                  "description": "Filter by status: pending | started | completed | failed | cancelled."
+                },
+                {
+                  "key": "job_type",
+                  "value": "image_convert_webp",
+                  "disabled": true,
+                  "description": "Filter by type: image_convert_webp | image_convert_avif | image_resize | video_convert | video_rotate | video_resize | video_trim | video_thumbnail."
+                }
+              ]
+            },
+            "description": "Returns a paginated list of all conversion jobs belonging to the authenticated user, ordered from newest to oldest.\n\n**Query Parameters:**\n\n| Parameter | Type | Default | Description |\n|---|---|---|---|\n| `page` | int | 1 | Page number |\n| `page_size` | int | 20 | Items per page (max: 100) |\n| `status` | string | — | Optional status filter |\n| `job_type` | string | — | Optional type filter |\n\nEnable the disabled query params above to filter results."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('items is an array', () => pm.expect(res.data.items).to.be.an('array'));",
+                  "pm.test('pagination fields present', () => {",
+                  "    pm.expect(res.data).to.have.property('total');",
+                  "    pm.expect(res.data).to.have.property('page');",
+                  "    pm.expect(res.data).to.have.property('page_size');",
+                  "    pm.expect(res.data.total).to.be.a('number');",
+                  "});",
+                  "",
+                  "console.log('Total jobs:', res.data.total);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Job Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/jobs/{{jobId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "jobs",
+                "{{jobId}}"
+              ]
+            },
+            "description": "Retrieve the full details and current status of a specific job.\n\nWhen `status == \"completed\"`, `data.result_url` contains a **presigned MinIO download URL** valid for `PRESIGNED_URL_EXPIRE` seconds (default: 1 hour). The URL is automatically saved to the `resultUrl` collection variable.\n\n**Response:**\n```json\n{\n  \"success\": true,\n  \"data\": {\n    \"id\": \"<uuid>\",\n    \"status\": \"completed\",\n    \"job_type\": \"image_convert_webp\",\n    \"result_url\": \"https://minio.host/bucket/output/...\",\n    \"error\": null,\n    \"created_at\": \"...\",\n    \"updated_at\": \"...\"\n  }\n}\n```\n\n> ℹ️ Poll this endpoint every 2–5 seconds until `status` is `completed` or `failed`."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const jid = pm.collectionVariables.get('jobId');",
+                  "if (!jid) {",
+                  "    console.warn('jobId is empty — run an Image or Video endpoint first.');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "",
+                  "pm.test('Status 200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('success is true', () => pm.expect(res.success).to.be.true);",
+                  "pm.test('job has id', () => pm.expect(res.data.id).to.be.a('string').and.not.empty);",
+                  "pm.test('job has status', () => pm.expect(res.data.status).to.be.a('string'));",
+                  "",
+                  "console.log('Job status:', res.data.status);",
+                  "",
+                  "if (res.data.status === 'completed') {",
+                  "    if (res.data.result_url) {",
+                  "        pm.collectionVariables.set('resultUrl', res.data.result_url);",
+                  "        console.log('resultUrl saved. Your file is ready to download.');",
+                  "    }",
+                  "} else if (res.data.status === 'failed') {",
+                  "    console.error('Job failed. Error:', res.data.error || 'unknown');",
+                  "} else {",
+                  "    console.log('Job is still processing. Poll again in a few seconds.');",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel Job",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/jobs/{{jobId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "jobs",
+                "{{jobId}}"
+              ]
+            },
+            "description": "Cancel and permanently delete a job.\n\n- If the job is `pending` or `started`, the Celery task is revoked.\n- Input and output files are removed from MinIO.\n- Returns `204 No Content` on success.\n- The `jobId` and `resultUrl` collection variables are cleared automatically by the test script.\n\n> ⚠️ This action is irreversible. Both the job record and any associated files are permanently deleted."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const jid = pm.collectionVariables.get('jobId');",
+                  "if (!jid) {",
+                  "    console.warn('jobId is empty — nothing to cancel.');",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 204 No Content', () => pm.response.to.have.status(204));",
+                  "",
+                  "pm.collectionVariables.set('jobId', '');",
+                  "pm.collectionVariables.set('resultUrl', '');",
+                  "console.log('Job deleted. jobId and resultUrl cleared.');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
