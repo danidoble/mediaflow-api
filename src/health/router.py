@@ -53,6 +53,16 @@ async def health():
     except Exception as exc:
         results["cwebp"] = f"error: {exc}"
 
+    # Email / SMTP
+    try:
+        from src.config import settings as _settings
+        if _settings.smtp_host:
+            results["email"] = "ok"
+        else:
+            results["email"] = "not configured"
+    except Exception as exc:
+        results["email"] = f"error: {exc}"
+
     all_ok = all(v == "ok" for v in results.values())
     return {
         "success": all_ok,

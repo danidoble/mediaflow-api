@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.jobs.exceptions import job_not_cancellable, job_not_found, job_not_owned
 from src.jobs.models import Job, JobStatus, JobType
 from src.storage import storage
+
+RESULT_TTL_HOURS = 24
 
 
 async def create_job(
@@ -43,10 +45,26 @@ async def update_job_status(
         job.error = error
     if celery_task_id is not None:
         job.celery_task_id = celery_task_id
+    if status == JobStatus.COMPLETED:
+        job.expires_at = datetime.utcnow() + timedelta(hours=RESULT_TTL_HOURS)
+        job.progress = 100
 
     await db.commit()
     await db.refresh(job)
     return job
+
+
+async def update_job_progress(
+    job_id: uuid.UUID,
+    progress: int,
+    db: AsyncSession,
+) -> None:
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalar_one_or_none()
+    if job:
+        job.progress = progress
+        job.updated_at = datetime.utcnow()
+        await db.commit()
 
 
 async def get_user_jobs(

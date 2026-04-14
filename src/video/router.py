@@ -1,6 +1,8 @@
 import magic
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from pydantic import EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Annotated, Optional
 
 from src.auth.dependencies import require_active
 from src.auth.models import User
@@ -52,13 +54,17 @@ async def convert_video(
     codec: str = Form("libx264"),
     crf: int = Form(23),
     preset: str = Form("medium"),
+    notify_email: Annotated[Optional[EmailStr], Form()] = None,
     current_user: User = Depends(require_active),
     db: AsyncSession = Depends(get_db),
 ):
     data, mime = await _validate_upload(file, settings.max_upload_size_bytes)
     input_key = storage.upload_bytes(data, mime, prefix="uploads")
     job = await create_job(current_user.id, JobType.VIDEO_CONVERT, input_key, db)
-    task = convert_video_task.delay(str(job.id), input_key, output_format, codec, crf, preset)
+    task = convert_video_task.delay(
+        str(job.id), input_key, output_format, codec, crf, preset,
+        notify_email=str(notify_email) if notify_email else None,
+    )
     await update_job_status(job.id, job.status, db, celery_task_id=task.id)
     return {"success": True, "data": {"job_id": str(job.id), "status": "pending"}, "message": "Job queued"}
 
@@ -70,6 +76,7 @@ async def rotate_video(
     file: UploadFile = File(...),
     degrees: int = Form(90),
     no_transcode: bool = Form(False),
+    notify_email: Annotated[Optional[EmailStr], Form()] = None,
     current_user: User = Depends(require_active),
     db: AsyncSession = Depends(get_db),
 ):
@@ -78,7 +85,7 @@ async def rotate_video(
     data, mime = await _validate_upload(file, settings.max_upload_size_bytes)
     input_key = storage.upload_bytes(data, mime, prefix="uploads")
     job = await create_job(current_user.id, JobType.VIDEO_ROTATE, input_key, db)
-    task = rotate_video_task.delay(str(job.id), input_key, degrees, no_transcode)
+    task = rotate_video_task.delay(str(job.id), input_key, degrees, no_transcode, notify_email=str(notify_email) if notify_email else None)
     await update_job_status(job.id, job.status, db, celery_task_id=task.id)
     return {"success": True, "data": {"job_id": str(job.id), "status": "pending"}, "message": "Job queued"}
 
@@ -91,13 +98,14 @@ async def resize_video(
     width: int | None = Form(None),
     height: int | None = Form(None),
     keep_aspect: bool = Form(True),
+    notify_email: Annotated[Optional[EmailStr], Form()] = None,
     current_user: User = Depends(require_active),
     db: AsyncSession = Depends(get_db),
 ):
     data, mime = await _validate_upload(file, settings.max_upload_size_bytes)
     input_key = storage.upload_bytes(data, mime, prefix="uploads")
     job = await create_job(current_user.id, JobType.VIDEO_RESIZE, input_key, db)
-    task = resize_video_task.delay(str(job.id), input_key, width, height, keep_aspect)
+    task = resize_video_task.delay(str(job.id), input_key, width, height, keep_aspect, notify_email=str(notify_email) if notify_email else None)
     await update_job_status(job.id, job.status, db, celery_task_id=task.id)
     return {"success": True, "data": {"job_id": str(job.id), "status": "pending"}, "message": "Job queued"}
 
@@ -109,13 +117,14 @@ async def trim_video(
     file: UploadFile = File(...),
     start_time: str = Form(...),
     end_time: str = Form(...),
+    notify_email: Annotated[Optional[EmailStr], Form()] = None,
     current_user: User = Depends(require_active),
     db: AsyncSession = Depends(get_db),
 ):
     data, mime = await _validate_upload(file, settings.max_upload_size_bytes)
     input_key = storage.upload_bytes(data, mime, prefix="uploads")
     job = await create_job(current_user.id, JobType.VIDEO_TRIM, input_key, db)
-    task = trim_video_task.delay(str(job.id), input_key, start_time, end_time)
+    task = trim_video_task.delay(str(job.id), input_key, start_time, end_time, notify_email=str(notify_email) if notify_email else None)
     await update_job_status(job.id, job.status, db, celery_task_id=task.id)
     return {"success": True, "data": {"job_id": str(job.id), "status": "pending"}, "message": "Job queued"}
 
@@ -126,12 +135,13 @@ async def video_thumbnail(
     request: Request,
     file: UploadFile = File(...),
     timestamp: str = Form("00:00:01"),
+    notify_email: Annotated[Optional[EmailStr], Form()] = None,
     current_user: User = Depends(require_active),
     db: AsyncSession = Depends(get_db),
 ):
     data, mime = await _validate_upload(file, settings.max_upload_size_bytes)
     input_key = storage.upload_bytes(data, mime, prefix="uploads")
     job = await create_job(current_user.id, JobType.VIDEO_THUMBNAIL, input_key, db)
-    task = thumbnail_video_task.delay(str(job.id), input_key, timestamp)
+    task = thumbnail_video_task.delay(str(job.id), input_key, timestamp, notify_email=str(notify_email) if notify_email else None)
     await update_job_status(job.id, job.status, db, celery_task_id=task.id)
     return {"success": True, "data": {"job_id": str(job.id), "status": "pending"}, "message": "Job queued"}

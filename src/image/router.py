@@ -1,6 +1,8 @@
 import magic
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from pydantic import EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Annotated, Optional
 
 from src.auth.dependencies import require_active
 from src.auth.models import User
@@ -45,13 +47,14 @@ async def convert_webp(
     file: UploadFile = File(...),
     quality: int = Form(80),
     lossless: bool = Form(False),
+    notify_email: Annotated[Optional[EmailStr], Form()] = None,
     current_user: User = Depends(require_active),
     db: AsyncSession = Depends(get_db),
 ):
     data, mime = await _validate_upload(file, settings.max_upload_size_bytes)
     input_key = storage.upload_bytes(data, mime, prefix="uploads")
     job = await create_job(current_user.id, JobType.IMAGE_CONVERT_WEBP, input_key, db)
-    task = convert_to_webp_task.delay(str(job.id), input_key, quality, lossless)
+    task = convert_to_webp_task.delay(str(job.id), input_key, quality, lossless, notify_email=str(notify_email) if notify_email else None)
     await update_job_status(job.id, job.status, db, celery_task_id=task.id)
     return {"success": True, "data": {"job_id": str(job.id), "status": "pending"}, "message": "Job queued"}
 
@@ -62,13 +65,14 @@ async def convert_avif(
     request: Request,
     file: UploadFile = File(...),
     quality: int = Form(60),
+    notify_email: Annotated[Optional[EmailStr], Form()] = None,
     current_user: User = Depends(require_active),
     db: AsyncSession = Depends(get_db),
 ):
     data, mime = await _validate_upload(file, settings.max_upload_size_bytes)
     input_key = storage.upload_bytes(data, mime, prefix="uploads")
     job = await create_job(current_user.id, JobType.IMAGE_CONVERT_AVIF, input_key, db)
-    task = convert_to_avif_task.delay(str(job.id), input_key, quality)
+    task = convert_to_avif_task.delay(str(job.id), input_key, quality, notify_email=str(notify_email) if notify_email else None)
     await update_job_status(job.id, job.status, db, celery_task_id=task.id)
     return {"success": True, "data": {"job_id": str(job.id), "status": "pending"}, "message": "Job queued"}
 
@@ -80,6 +84,7 @@ async def convert_image_format(
     file: UploadFile = File(...),
     output_format: str = Form(...),
     quality: int = Form(85),
+    notify_email: Annotated[Optional[EmailStr], Form()] = None,
     current_user: User = Depends(require_active),
     db: AsyncSession = Depends(get_db),
 ):
@@ -88,7 +93,7 @@ async def convert_image_format(
     data, mime = await _validate_upload(file, settings.max_upload_size_bytes)
     input_key = storage.upload_bytes(data, mime, prefix="uploads")
     job = await create_job(current_user.id, JobType.IMAGE_CONVERT_FORMAT, input_key, db)
-    task = convert_format_task.delay(str(job.id), input_key, output_format, quality)
+    task = convert_format_task.delay(str(job.id), input_key, output_format, quality, notify_email=str(notify_email) if notify_email else None)
     await update_job_status(job.id, job.status, db, celery_task_id=task.id)
     return {"success": True, "data": {"job_id": str(job.id), "status": "pending"}, "message": "Job queued"}
 
@@ -101,13 +106,14 @@ async def resize_image(
     width: int | None = Form(None),
     height: int | None = Form(None),
     fit: str = Form("cover"),
+    notify_email: Annotated[Optional[EmailStr], Form()] = None,
     current_user: User = Depends(require_active),
     db: AsyncSession = Depends(get_db),
 ):
     data, mime = await _validate_upload(file, settings.max_upload_size_bytes)
     input_key = storage.upload_bytes(data, mime, prefix="uploads")
     job = await create_job(current_user.id, JobType.IMAGE_RESIZE, input_key, db)
-    task = resize_image_task.delay(str(job.id), input_key, width, height, fit)
+    task = resize_image_task.delay(str(job.id), input_key, width, height, fit, notify_email=str(notify_email) if notify_email else None)
     await update_job_status(job.id, job.status, db, celery_task_id=task.id)
     return {"success": True, "data": {"job_id": str(job.id), "status": "pending"}, "message": "Job queued"}
 
@@ -119,17 +125,19 @@ async def batch_convert_webp(
     files: list[UploadFile] = File(...),
     quality: int = Form(80),
     lossless: bool = Form(False),
+    notify_email: Annotated[Optional[EmailStr], Form()] = None,
     current_user: User = Depends(require_active),
     db: AsyncSession = Depends(get_db),
 ):
     if len(files) > _MAX_BATCH_FILES:
         raise HTTPException(status_code=422, detail=f"Maximum {_MAX_BATCH_FILES} files per batch request")
     jobs = []
+    notify = str(notify_email) if notify_email else None
     for file in files:
         data, mime = await _validate_upload(file, settings.max_upload_size_bytes)
         input_key = storage.upload_bytes(data, mime, prefix="uploads")
         job = await create_job(current_user.id, JobType.IMAGE_CONVERT_WEBP, input_key, db)
-        task = convert_to_webp_task.delay(str(job.id), input_key, quality, lossless)
+        task = convert_to_webp_task.delay(str(job.id), input_key, quality, lossless, notify_email=notify)
         await update_job_status(job.id, job.status, db, celery_task_id=task.id)
         jobs.append({"job_id": str(job.id), "filename": file.filename, "status": "pending"})
     return {"success": True, "data": {"jobs": jobs, "total": len(jobs)}, "message": f"{len(jobs)} jobs queued"}
@@ -141,17 +149,19 @@ async def batch_convert_avif(
     request: Request,
     files: list[UploadFile] = File(...),
     quality: int = Form(60),
+    notify_email: Annotated[Optional[EmailStr], Form()] = None,
     current_user: User = Depends(require_active),
     db: AsyncSession = Depends(get_db),
 ):
     if len(files) > _MAX_BATCH_FILES:
         raise HTTPException(status_code=422, detail=f"Maximum {_MAX_BATCH_FILES} files per batch request")
     jobs = []
+    notify = str(notify_email) if notify_email else None
     for file in files:
         data, mime = await _validate_upload(file, settings.max_upload_size_bytes)
         input_key = storage.upload_bytes(data, mime, prefix="uploads")
         job = await create_job(current_user.id, JobType.IMAGE_CONVERT_AVIF, input_key, db)
-        task = convert_to_avif_task.delay(str(job.id), input_key, quality)
+        task = convert_to_avif_task.delay(str(job.id), input_key, quality, notify_email=notify)
         await update_job_status(job.id, job.status, db, celery_task_id=task.id)
         jobs.append({"job_id": str(job.id), "filename": file.filename, "status": "pending"})
     return {"success": True, "data": {"jobs": jobs, "total": len(jobs)}, "message": f"{len(jobs)} jobs queued"}
@@ -164,6 +174,7 @@ async def batch_convert_format(
     files: list[UploadFile] = File(...),
     output_format: str = Form(...),
     quality: int = Form(85),
+    notify_email: Annotated[Optional[EmailStr], Form()] = None,
     current_user: User = Depends(require_active),
     db: AsyncSession = Depends(get_db),
 ):
@@ -172,11 +183,12 @@ async def batch_convert_format(
     if output_format.lower().lstrip(".") not in ALLOWED_OUTPUT_FORMATS:
         raise HTTPException(status_code=422, detail=f"output_format must be one of: {', '.join(sorted(ALLOWED_OUTPUT_FORMATS))}")
     jobs = []
+    notify = str(notify_email) if notify_email else None
     for file in files:
         data, mime = await _validate_upload(file, settings.max_upload_size_bytes)
         input_key = storage.upload_bytes(data, mime, prefix="uploads")
         job = await create_job(current_user.id, JobType.IMAGE_CONVERT_FORMAT, input_key, db)
-        task = convert_format_task.delay(str(job.id), input_key, output_format, quality)
+        task = convert_format_task.delay(str(job.id), input_key, output_format, quality, notify_email=notify)
         await update_job_status(job.id, job.status, db, celery_task_id=task.id)
         jobs.append({"job_id": str(job.id), "filename": file.filename, "status": "pending"})
     return {"success": True, "data": {"jobs": jobs, "total": len(jobs)}, "message": f"{len(jobs)} jobs queued"}

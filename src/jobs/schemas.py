@@ -14,6 +14,8 @@ class JobRead(BaseModel):
     status: JobStatus
     job_type: JobType
     result_url: str | None = None
+    result_expired: bool = False
+    progress: int | None = None
     error: str | None = None
     created_at: datetime
     updated_at: datetime

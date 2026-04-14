@@ -43,10 +43,19 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
 
     # Upload limits
-    max_upload_size_mb: int = 500
+    max_upload_size_mb: int = 1024
 
     # CORS
     allowed_origins: list[str] = ["*"]
+
+    # SMTP — optional, for job-completion email notifications.
+    # Leave smtp_host empty to disable email entirely.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_tls: bool = True  # True → STARTTLS (port 587), False → SMTP_SSL (port 465)
 
     # App
     debug: bool = False

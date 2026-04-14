@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,10 +22,18 @@ def _ok(data, message: str = "") -> dict:
 def _to_read(job) -> JobRead:
     jr = JobRead.model_validate(job)
     if job.result_key:
-        try:
-            jr.result_url = storage.get_presigned_url(job.result_key)
-        except Exception:
-            pass
+        now = datetime.utcnow()
+        if job.expires_at and job.expires_at <= now:
+            jr.result_expired = True
+        else:
+            try:
+                expires_in = None
+                if job.expires_at:
+                    remaining = int((job.expires_at - now).total_seconds())
+                    expires_in = max(60, remaining)
+                jr.result_url = storage.get_presigned_url(job.result_key, expires=expires_in)
+            except Exception:
+                pass
     return jr
 
 

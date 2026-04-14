@@ -3,6 +3,7 @@ from datetime import datetime
 from enum import Enum
 
 from sqlmodel import Field, SQLModel
+from typing import Optional
 
 
 class JobStatus(str, Enum):
@@ -36,5 +37,7 @@ class Job(SQLModel, table=True):
     result_key: str | None = None
     error: str | None = None
     celery_task_id: str | None = None
+    progress: Optional[int] = Field(default=None, nullable=True)
+    expires_at: Optional[datetime] = Field(default=None, nullable=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)

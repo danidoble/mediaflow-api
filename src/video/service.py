@@ -1,6 +1,9 @@
+import json
 import os
 import subprocess
 import tempfile
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 ALLOWED_VIDEO_MIMES = {
@@ -20,6 +23,50 @@ _THREADS = str(os.cpu_count() or 1)
 _EXT_MAP = {"mp4": "mp4", "webm": "webm", "mkv": "mkv"}
 _MIME_MAP = {"mp4": "video/mp4", "webm": "video/webm", "mkv": "video/x-matroska"}
 
+_FFMPEG_TIMEOUT = 3600
+
+# WebM container only supports VP8/VP9/AV1 video + Vorbis/Opus audio.
+# Auto-select sane defaults when the requested codec is incompatible.
+_WEBM_ALLOWED_VIDEO = {"libvpx", "libvpx-vp9", "libaom-av1", "libsvtav1", "librav1e"}
+_FORMAT_DEFAULT_CODEC = {"webm": "libvpx-vp9"}
+_FORMAT_AUDIO = {"webm": "libopus"}
+# Codecs that do NOT accept the -preset option (VP8, VP9, AV1 variants).
+_NO_PRESET_CODECS = {"libvpx", "libvpx-vp9", "libaom-av1", "libsvtav1", "librav1e"}
+
+# Per-codec extra speed/quality flags injected instead of -preset.
+# libaom-av1 default cpu-used=1 is catastrophically slow; 6 is fast/usable.
+# libvpx-vp9 benefits from -deadline good + cpu-used for reasonable speed.
+_CODEC_EXTRA_ARGS: dict[str, list[str]] = {
+    "libaom-av1": ["-cpu-used", "6", "-row-mt", "1"],
+    "libsvtav1":  ["-preset", "8"],
+    "librav1e":   ["-speed", "8"],
+    "libvpx-vp9": ["-deadline", "good", "-cpu-used", "4", "-row-mt", "1"],
+    "libvpx":     ["-deadline", "good", "-cpu-used", "4"],
+}
+
+
+def _get_video_duration(input_path: Path) -> float | None:
+    """Return video duration in seconds via ffprobe, or None on failure."""
+    try:
+        r = subprocess.run(
+            [
+                "ffprobe", "-v", "quiet",
+                "-print_format", "json",
+                "-show_format",
+                str(input_path),
+            ],
+            capture_output=True,
+            timeout=30,
+        )
+        if r.returncode == 0:
+            info = json.loads(r.stdout.decode())
+            dur = info.get("format", {}).get("duration")
+            if dur:
+                return float(dur)
+    except Exception:
+        pass
+    return None
+
 
 def convert_video(
     data: bytes,
@@ -27,31 +74,79 @@ def convert_video(
     codec: str = "libx264",
     crf: int = 23,
     preset: str = "medium",
+    on_progress: Callable[[int], None] | None = None,
 ) -> tuple[bytes, str]:
     ext = _EXT_MAP.get(output_format, "mp4")
     mime = _MIME_MAP.get(output_format, "video/mp4")
 
+    # Validate/correct codec for the target container.
+    # WebM only accepts VP8/VP9/AV1; fall back to VP9 if an incompatible codec was requested.
+    if output_format == "webm" and codec not in _WEBM_ALLOWED_VIDEO:
+        codec = _FORMAT_DEFAULT_CODEC["webm"]
+
+    audio_codec = _FORMAT_AUDIO.get(output_format, "aac")
+    use_preset = codec not in _NO_PRESET_CODECS
+
     with tempfile.TemporaryDirectory() as tmpdir:
         input_path = Path(tmpdir) / "input"
         output_path = Path(tmpdir) / f"output.{ext}"
+        progress_path = Path(tmpdir) / "ffprogress.txt"
+        stderr_path = Path(tmpdir) / "ffstderr.txt"
         input_path.write_bytes(data)
 
-        # shell=False intentional; args are validated from enum before reaching here
+        duration = _get_video_duration(input_path) if on_progress else None
+
+        # shell=False intentional; args are validated/corrected above
         cmd = [
             "ffmpeg",
             "-threads", _THREADS,
             "-i", str(input_path),
             "-c:v", codec,
             "-crf", str(crf),
-            "-preset", preset,
-            "-c:a", "aac",
-            "-y",
-            str(output_path),
         ]
+        if use_preset:
+            cmd += ["-preset", preset]
+        if codec in _CODEC_EXTRA_ARGS:
+            cmd += _CODEC_EXTRA_ARGS[codec]
+        cmd += ["-c:a", audio_codec]
+        if on_progress and duration:
+            cmd += ["-progress", str(progress_path), "-nostats"]
+        cmd += ["-y", str(output_path)]
 
-        result = subprocess.run(cmd, capture_output=True, timeout=3600)
-        if result.returncode != 0:
-            raise RuntimeError(f"ffmpeg convert failed: {result.stderr.decode()}")
+        if on_progress and duration:
+            # stderr to a file to avoid the pipe buffer filling up and deadlocking
+            # on long conversions (e.g. MKV/VP9 that produce verbose output).
+            with open(stderr_path, "wb") as stderr_fh:
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=stderr_fh)
+            last_pct = 0
+            start = time.monotonic()
+            while proc.poll() is None:
+                if time.monotonic() - start > _FFMPEG_TIMEOUT:
+                    proc.kill()
+                    proc.wait()
+                    raise RuntimeError("ffmpeg convert timed out")
+                time.sleep(1)
+                if progress_path.exists():
+                    try:
+                        for line in reversed(progress_path.read_text().splitlines()):
+                            if line.startswith("out_time_ms="):
+                                val = line.split("=", 1)[1].strip()
+                                if val and val != "N/A":
+                                    secs = int(val) / 1_000_000
+                                    pct = min(int(secs / duration * 100), 99)
+                                    if pct > last_pct:
+                                        last_pct = pct
+                                        on_progress(pct)
+                                break
+                    except Exception:
+                        pass
+            if proc.returncode != 0:
+                stderr_msg = stderr_path.read_text(errors="replace") if stderr_path.exists() else ""
+                raise RuntimeError(f"ffmpeg convert failed: {stderr_msg}")
+        else:
+            result = subprocess.run(cmd, capture_output=True, timeout=_FFMPEG_TIMEOUT)
+            if result.returncode != 0:
+                raise RuntimeError(f"ffmpeg convert failed: {result.stderr.decode()}")
 
         return output_path.read_bytes(), mime
 
